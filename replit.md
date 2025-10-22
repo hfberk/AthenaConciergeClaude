@@ -112,8 +112,10 @@ The backend automatically allows:
 
 ### Deployment Configuration
 - **Type**: VM (stateful, always running)
-- **Build**: `cd frontend && npm run build`
-- **Run**: Both backend and frontend servers run concurrently
+- **Build**: `cd frontend && npm install && npm run build` - Installs dependencies and builds the frontend
+- **Run**: Both backend and frontend servers run concurrently:
+  - Backend: `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`
+  - Frontend: `npm run start` (configured to run on port 5000)
 
 ### Python Dependencies
 - FastAPI ecosystem (fastapi, uvicorn, pydantic, pydantic-settings)
