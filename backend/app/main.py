@@ -39,7 +39,14 @@ app = FastAPI(
 
 # CORS middleware
 replit_domain = os.getenv("REPLIT_DEV_DOMAIN", "")
-allowed_origins = [settings.frontend_url, "http://localhost:3000"]
+allowed_origins = [
+    settings.frontend_url,
+    "http://localhost:3000",
+    "http://localhost:5000",
+    "https://localhost:5000",
+    "http://127.0.0.1:5000",
+    "https://127.0.0.1:5000"
+]
 if replit_domain:
     allowed_origins.extend([
         f"https://{replit_domain}",
