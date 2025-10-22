@@ -4,6 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
+packages = ["nedit"]
 
 [workflows]
 runButton = "Project"
@@ -53,11 +54,8 @@ externalPort = 80
 localPort = 8000
 externalPort = 8000
 
-[[ports]]
-localPort = 35619
-externalPort = 3000
-
 [deployment]
 deploymentTarget = "vm"
-run = ["sh", "-c", "cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 & cd frontend && npm run start"]
-build = ["sh", "-c", "cd frontend && npm install && npm run build"]
+ipv6 = true
+run = ["sh", "-c", "(cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000) & (cd frontend && npm run start)"]
+build = ["sh", "-c", "npm --prefix frontend install && npm --prefix frontend run build"]

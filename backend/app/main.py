@@ -1,6 +1,7 @@
 """FastAPI main application"""
 
 import os
+import threading
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,6 +23,16 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Concierge Platform", version=settings.app_version)
     if not health_check():
         logger.error("Database health check failed at startup!")
+
+    # Start Slack integration in background thread
+    if settings.slack_bot_token and settings.slack_app_token:
+        logger.info("Starting Slack Socket Mode integration")
+        from app.integrations.slack import start_slack_integration
+        slack_thread = threading.Thread(target=start_slack_integration, daemon=True)
+        slack_thread.start()
+        logger.info("Slack integration started in background thread")
+    else:
+        logger.warning("Slack credentials not configured, integration disabled")
 
     yield
 

@@ -44,10 +44,11 @@ class SlackIntegration:
                            user_id=user_id,
                            channel=channel)
 
-                # Look up person by Slack ID
+                # Look up or create person by Slack ID
                 with get_db_context() as db:
                     from app.models.communication import CommIdentity
                     from app.models.identity import Person
+                    from uuid import UUID
 
                     comm_identity = db.query(CommIdentity).filter(
                         CommIdentity.channel_type == "slack",
@@ -55,9 +56,66 @@ class SlackIntegration:
                         CommIdentity.deleted_at.is_(None)
                     ).first()
 
+                    # Auto-create user if not found
                     if not comm_identity:
-                        say("Sorry, I don't recognize your Slack account. Please contact support.")
-                        return
+                        logger.info("New Slack user detected, auto-creating", user_id=user_id)
+
+                        # Get user info from Slack
+                        try:
+                            user_info = client.users_info(user=user_id)
+                            slack_user = user_info.get("user", {})
+                            display_name = slack_user.get("real_name") or slack_user.get("name") or f"Slack User {user_id}"
+                            email = slack_user.get("profile", {}).get("email")
+                        except Exception as e:
+                            logger.warning("Could not fetch Slack user info", error=str(e))
+                            display_name = f"Slack User {user_id}"
+                            email = None
+
+                        # Use default org (first org in database, or create one)
+                        from app.models.identity import Organization
+                        default_org = db.query(Organization).filter(
+                            Organization.deleted_at.is_(None)
+                        ).first()
+
+                        if not default_org:
+                            # Create default organization
+                            default_org = Organization(
+                                org_name="Default Organization",
+                                org_type="concierge"
+                            )
+                            db.add(default_org)
+                            db.commit()
+                            db.refresh(default_org)
+                            logger.info("Created default organization", org_id=str(default_org.org_id))
+
+                        # Create person
+                        person = Person(
+                            org_id=default_org.org_id,
+                            person_type="client",
+                            full_name=display_name,
+                            preferred_name=display_name.split()[0] if display_name else "there",
+                            email=email
+                        )
+                        db.add(person)
+                        db.commit()
+                        db.refresh(person)
+                        logger.info("Created new person", person_id=str(person.person_id))
+
+                        # Create comm identity
+                        comm_identity = CommIdentity(
+                            org_id=default_org.org_id,
+                            person_id=person.person_id,
+                            channel_type="slack",
+                            identity_value=user_id,
+                            display_name=display_name
+                        )
+                        db.add(comm_identity)
+                        db.commit()
+                        db.refresh(comm_identity)
+                        logger.info("Created Slack identity", comm_identity_id=str(comm_identity.comm_identity_id))
+
+                        # Welcome message for new users
+                        say(f"Hello {display_name.split()[0]}! 👋 Welcome to Athena Concierge. I'm your AI assistant. How can I help you today?")
 
                     person = comm_identity.person
 
