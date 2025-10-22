@@ -1,6 +1,6 @@
 """Database connection and session management"""
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
@@ -77,7 +77,7 @@ def health_check() -> bool:
     """Check if database connection is healthy"""
     try:
         with get_db_context() as db:
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error("Database health check failed", error=str(e))
