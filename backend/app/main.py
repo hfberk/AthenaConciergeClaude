@@ -1,5 +1,6 @@
 """FastAPI main application"""
 
+import os
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -37,9 +38,17 @@ app = FastAPI(
 )
 
 # CORS middleware
+replit_domain = os.getenv("REPLIT_DEV_DOMAIN", "")
+allowed_origins = [settings.frontend_url, "http://localhost:3000"]
+if replit_domain:
+    allowed_origins.extend([
+        f"https://{replit_domain}",
+        f"http://{replit_domain}"
+    ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
