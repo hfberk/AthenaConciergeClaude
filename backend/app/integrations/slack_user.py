@@ -61,6 +61,11 @@ class SlackUserIntegration:
         def handle_message(event, say, client):
             """Handle messages in channels where Athena Concierge user is present"""
             try:
+                # Ignore message subtypes (edited, deleted, etc.) - only process new messages
+                if event.get("subtype") is not None:
+                    logger.debug("Ignoring message with subtype", subtype=event.get("subtype"))
+                    return
+
                 # Ignore messages from the Athena Concierge user itself to prevent loops
                 if event.get("user") == self.user_id:
                     logger.debug("Ignoring message from Athena Concierge user itself")
@@ -75,26 +80,33 @@ class SlackUserIntegration:
                 user_id = event.get("user")
                 text = event.get("text", "")
                 channel = event.get("channel")
-                channel_type = event.get("channel_type", "")
 
-                # Only respond to:
-                # 1. Direct messages (DMs)
-                # 2. Messages where Athena Concierge is @mentioned
-                is_dm = channel_type == "im"
+                # Slack channel ID conventions:
+                # - DMs start with "D" (e.g., "D1234567890")
+                # - Public channels start with "C"
+                # - Private channels start with "G"
+                is_dm = channel and channel.startswith("D")
                 user_mentioned = f"<@{self.user_id}>" in text
-
-                if not is_dm and not user_mentioned:
-                    logger.debug("Ignoring message - not a DM and user not mentioned")
-                    return
-
-                # Remove the mention from the text if present
-                clean_text = text.replace(f"<@{self.user_id}>", "").strip()
 
                 logger.info("Received Slack message for Athena Concierge",
                            user_id=user_id,
                            channel=channel,
                            is_dm=is_dm,
-                           mentioned=user_mentioned)
+                           mentioned=user_mentioned,
+                           has_text=bool(text))
+
+                # Only respond to:
+                # 1. Direct messages (DMs)
+                # 2. Messages where Athena Concierge is @mentioned
+                if not is_dm and not user_mentioned:
+                    logger.debug("Ignoring message - not a DM and user not mentioned",
+                               channel=channel,
+                               is_dm=is_dm,
+                               mentioned=user_mentioned)
+                    return
+
+                # Remove the mention from the text if present
+                clean_text = text.replace(f"<@{self.user_id}>", "").strip()
 
                 # Look up or create person by Slack ID
                 with get_db_context() as db:
@@ -103,7 +115,7 @@ class SlackUserIntegration:
                         client=db,
                         table='comm_identities',
                         filters={
-                            'channel': 'slack',
+                            'channel_type': 'slack',
                             'identity_value': user_id
                         },
                         limit=1
@@ -136,42 +148,41 @@ class SlackUserIntegration:
                         if not default_org:
                             # Create default organization
                             org_data = {
-                                'id': str(uuid4()),
+                                'org_id': str(uuid4()),
                                 'name': 'Default Organization',
-                                'settings': {},
+                                'settings_jsonb': {},
                                 'created_at': datetime.utcnow().isoformat(),
                                 'updated_at': datetime.utcnow().isoformat()
                             }
                             default_org = SupabaseQuery.insert(db, 'organizations', org_data)
-                            logger.info("Created default organization", org_id=default_org['id'])
+                            logger.info("Created default organization", org_id=default_org['org_id'])
 
                         # Create person
                         person_data = {
-                            'id': str(uuid4()),
-                            'org_id': default_org['id'],
+                            'person_id': str(uuid4()),
+                            'org_id': default_org['org_id'],
                             'person_type': 'client',
                             'full_name': display_name,
                             'preferred_name': display_name.split()[0] if display_name else 'there',
-                            'status': 'active',
                             'created_at': datetime.utcnow().isoformat(),
                             'updated_at': datetime.utcnow().isoformat()
                         }
                         person = SupabaseQuery.insert(db, 'persons', person_data)
-                        logger.info("Created new person", person_id=person['id'])
+                        logger.info("Created new person", person_id=person['person_id'])
 
                         # Create comm identity
                         comm_identity_data = {
-                            'id': str(uuid4()),
-                            'org_id': default_org['id'],
-                            'person_id': person['id'],
-                            'channel': 'slack',
+                            'comm_identity_id': str(uuid4()),
+                            'org_id': default_org['org_id'],
+                            'person_id': person['person_id'],
+                            'channel_type': 'slack',
                             'identity_value': user_id,
                             'is_primary': True,
                             'created_at': datetime.utcnow().isoformat(),
                             'updated_at': datetime.utcnow().isoformat()
                         }
                         comm_identity = SupabaseQuery.insert(db, 'comm_identities', comm_identity_data)
-                        logger.info("Created Slack identity", comm_identity_id=comm_identity['id'])
+                        logger.info("Created Slack identity", comm_identity_id=comm_identity['comm_identity_id'])
 
                         # Welcome message for new users (sent as Athena Concierge user)
                         welcome_msg = f"Hello {display_name.split()[0]}! Welcome to Athena Concierge. I'm here to assist you. How can I help you today?"
@@ -190,7 +201,7 @@ class SlackUserIntegration:
                         client=db,
                         table='conversations',
                         filters={
-                            'channel': 'slack',
+                            'channel_type': 'slack',
                             'external_thread_id': channel
                         },
                         limit=1
@@ -199,32 +210,33 @@ class SlackUserIntegration:
 
                     if not conversation:
                         conversation_data = {
-                            'id': str(uuid4()),
+                            'conversation_id': str(uuid4()),
                             'org_id': person['org_id'],
-                            'channel': 'slack',
+                            'person_id': person['person_id'],
+                            'channel_type': 'slack',
                             'external_thread_id': channel,
-                            'created_at': datetime.utcnow().isoformat()
+                            'status': 'active',
+                            'created_at': datetime.utcnow().isoformat(),
+                            'updated_at': datetime.utcnow().isoformat()
                         }
                         conversation = SupabaseQuery.insert(db, 'conversations', conversation_data)
 
                     # Save inbound message
                     inbound_msg_data = {
-                        'id': str(uuid4()),
+                        'message_id': str(uuid4()),
                         'org_id': person['org_id'],
-                        'conversation_id': conversation['id'],
-                        'person_id': person['id'],
-                        'channel': 'slack',
+                        'conversation_id': conversation['conversation_id'],
                         'direction': 'inbound',
-                        'sender_type': 'person',
-                        'body_text': clean_text,
-                        'external_id': event.get('ts'),
+                        'sender_person_id': person['person_id'],
+                        'content_text': clean_text,
+                        'external_message_id': event.get('ts'),
                         'created_at': datetime.utcnow().isoformat()
                     }
                     inbound_msg = SupabaseQuery.insert(db, 'messages', inbound_msg_data)
 
                     # Build context and process with orchestrator
                     context_builder = ContextBuilder(db)
-                    context = context_builder.build_context(person['id'], conversation['id'])
+                    context = context_builder.build_context(person['person_id'], conversation['conversation_id'])
 
                     orchestrator = OrchestratorAgent(db)
                     ai_response = orchestrator.process_message(
@@ -236,14 +248,12 @@ class SlackUserIntegration:
 
                     # Save outbound message
                     outbound_msg_data = {
-                        'id': str(uuid4()),
+                        'message_id': str(uuid4()),
                         'org_id': person['org_id'],
-                        'conversation_id': conversation['id'],
-                        'channel': 'slack',
+                        'conversation_id': conversation['conversation_id'],
                         'direction': 'outbound',
-                        'sender_type': 'agent',
                         'agent_name': 'orchestrator',
-                        'body_text': ai_response,
+                        'content_text': ai_response,
                         'created_at': datetime.utcnow().isoformat()
                     }
                     outbound_msg = SupabaseQuery.insert(db, 'messages', outbound_msg_data)

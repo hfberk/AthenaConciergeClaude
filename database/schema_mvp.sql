@@ -42,6 +42,7 @@ CREATE TABLE accounts (
 CREATE TABLE persons (
     person_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(org_id),
+    auth_user_id UUID UNIQUE REFERENCES auth.users(id), -- For client authentication (added in migration 003)
     person_type VARCHAR(50) NOT NULL CHECK (person_type IN ('client', 'staff', 'family_member')),
     full_name VARCHAR(255) NOT NULL,
     preferred_name VARCHAR(100),
@@ -55,6 +56,7 @@ CREATE TABLE persons (
 
 CREATE INDEX idx_persons_org ON persons(org_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_persons_type ON persons(person_type) WHERE deleted_at IS NULL;
+CREATE INDEX idx_persons_auth_user ON persons(auth_user_id);
 CREATE INDEX idx_persons_metadata ON persons USING gin(metadata_jsonb);
 
 -- =====================================================
