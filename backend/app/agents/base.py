@@ -3,12 +3,12 @@
 from abc import ABC, abstractmethod
 from uuid import uuid4
 from datetime import datetime
-from sqlalchemy.orm import Session
+from supabase import Client
 from anthropic import Anthropic
 import structlog
 
 from app.config import get_settings
-from app.models.agents import AgentExecutionLog
+from app.utils.supabase_helpers import SupabaseQuery
 
 settings = get_settings()
 logger = structlog.get_logger()
@@ -17,7 +17,7 @@ logger = structlog.get_logger()
 class BaseAgent(ABC):
     """Base class for all AI agents"""
 
-    def __init__(self, db: Session, agent_name: str = None):
+    def __init__(self, db: Client, agent_name: str = None):
         self.db = db
         self.agent_name = agent_name or self.__class__.__name__
         self.client = Anthropic(api_key=settings.anthropic_api_key)
@@ -160,21 +160,26 @@ Timezone: {person.get('timezone')}
                       context: dict, execution_time_ms: int, tokens_used: int):
         """Log agent execution to database"""
         try:
-            from app.models.agents import AgentRoster
-
             # Find agent in roster
-            agent = self.db.query(AgentRoster).filter(
-                AgentRoster.agent_name == self.agent_name,
-                AgentRoster.status == "active"
-            ).first()
+            agents = SupabaseQuery.select_active(
+                client=self.db,
+                table='agent_roster',
+                filters={
+                    'agent_name': self.agent_name,
+                    'status': 'active'
+                },
+                limit=1
+            )
+            agent = agents[0] if agents else None
 
             if agent:
-                log = AgentExecutionLog(
-                    org_id=agent.org_id,
-                    agent_id=agent.agent_id,
-                    run_id=run_id,
-                    turn_index=0,
-                    payload_jsonb={
+                log_data = {
+                    'agent_execution_log_id': str(uuid4()),
+                    'org_id': agent['org_id'],
+                    'agent_id': agent['agent_id'],
+                    'run_id': str(run_id),
+                    'turn_index': 0,
+                    'payload_jsonb': {
                         "user_message": user_message,
                         "response": response,
                         "context_summary": {
@@ -183,10 +188,11 @@ Timezone: {person.get('timezone')}
                             "has_projects": bool(context.get("active_projects")),
                         }
                     },
-                    execution_time_ms=execution_time_ms,
-                    tokens_used=tokens_used
-                )
-                self.db.add(log)
-                self.db.commit()
+                    'execution_time_ms': execution_time_ms,
+                    'tokens_used': tokens_used,
+                    'created_at': datetime.utcnow().isoformat(),
+                    'updated_at': datetime.utcnow().isoformat()
+                }
+                SupabaseQuery.insert(self.db, 'agent_execution_logs', log_data)
         except Exception as e:
             logger.warning("Failed to log agent execution", error=str(e))

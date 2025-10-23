@@ -1,14 +1,14 @@
 """Project API endpoints"""
 
 from typing import List
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from supabase import Client
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, datetime
 
 from app.database import get_db
-from app.models.projects import Project, Task
+from app.utils.supabase_helpers import SupabaseQuery
 
 router = APIRouter()
 
@@ -71,31 +71,36 @@ async def list_projects(
     status: str | None = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """List projects with optional filtering"""
-    query = db.query(Project).filter(
-        Project.org_id == org_id,
-        Project.deleted_at.is_(None)
+    filters = {'org_id': org_id}
+    if person_id:
+        filters['person_id'] = person_id
+    if status:
+        filters['status'] = status
+
+    projects = SupabaseQuery.select_active(
+        client=db,
+        table='projects',
+        filters=filters,
+        order_by='priority,created_at.desc',
+        limit=limit,
+        offset=skip
     )
 
-    if person_id:
-        query = query.filter(Project.person_id == person_id)
-
-    if status:
-        query = query.filter(Project.status == status)
-
-    projects = query.order_by(Project.priority, Project.created_at.desc()).offset(skip).limit(limit).all()
     return projects
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: UUID, db: Session = Depends(get_db)):
+async def get_project(project_id: UUID, db: Client = Depends(get_db)):
     """Get project by ID"""
-    project = db.query(Project).filter(
-        Project.project_id == project_id,
-        Project.deleted_at.is_(None)
-    ).first()
+    project = SupabaseQuery.get_by_id(
+        client=db,
+        table='projects',
+        id_column='project_id',
+        id_value=project_id
+    )
 
     if not project:
         raise HTTPException(
@@ -107,60 +112,77 @@ async def get_project(project_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+async def create_project(project: ProjectCreate, db: Client = Depends(get_db)):
     """Create new project"""
-    db_project = Project(**project.model_dump())
-    db.add(db_project)
-    db.commit()
-    db.refresh(db_project)
-    return db_project
+    project_data = project.model_dump()
+    project_data['project_id'] = uuid4()
+    project_data['created_at'] = datetime.utcnow().isoformat()
+    project_data['updated_at'] = datetime.utcnow().isoformat()
+
+    created_project = SupabaseQuery.insert(
+        client=db,
+        table='projects',
+        data=project_data
+    )
+
+    return created_project
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: UUID,
     project_update: ProjectBase,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """Update project"""
-    db_project = db.query(Project).filter(
-        Project.project_id == project_id,
-        Project.deleted_at.is_(None)
-    ).first()
+    existing_project = SupabaseQuery.get_by_id(
+        client=db,
+        table='projects',
+        id_column='project_id',
+        id_value=project_id
+    )
 
-    if not db_project:
+    if not existing_project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
 
-    for key, value in project_update.model_dump(exclude_unset=True).items():
-        setattr(db_project, key, value)
+    update_data = project_update.model_dump(exclude_unset=True)
+    updated_project = SupabaseQuery.update(
+        client=db,
+        table='projects',
+        id_column='project_id',
+        id_value=project_id,
+        data=update_data
+    )
 
-    db.commit()
-    db.refresh(db_project)
-    return db_project
+    return updated_project
 
 
 @router.get("/{project_id}/tasks", response_model=List[TaskResponse])
-async def list_project_tasks(project_id: UUID, db: Session = Depends(get_db)):
+async def list_project_tasks(project_id: UUID, db: Client = Depends(get_db)):
     """List tasks for a project"""
-    tasks = db.query(Task).filter(
-        Task.project_id == project_id,
-        Task.deleted_at.is_(None)
-    ).order_by(Task.sort_order).all()
+    tasks = SupabaseQuery.select_active(
+        client=db,
+        table='tasks',
+        filters={'project_id': project_id},
+        order_by='sort_order'
+    )
 
     return tasks
 
 
 @router.post("/{project_id}/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
-async def create_task(project_id: UUID, task: TaskCreate, db: Session = Depends(get_db)):
+async def create_task(project_id: UUID, task: TaskCreate, db: Client = Depends(get_db)):
     """Create new task"""
     # Verify project exists
-    project = db.query(Project).filter(
-        Project.project_id == project_id,
-        Project.deleted_at.is_(None)
-    ).first()
+    project = SupabaseQuery.get_by_id(
+        client=db,
+        table='projects',
+        id_column='project_id',
+        id_value=project_id
+    )
 
     if not project:
         raise HTTPException(
@@ -168,8 +190,16 @@ async def create_task(project_id: UUID, task: TaskCreate, db: Session = Depends(
             detail="Project not found"
         )
 
-    db_task = Task(org_id=project.org_id, **task.model_dump())
-    db.add(db_task)
-    db.commit()
-    db.refresh(db_task)
-    return db_task
+    task_data = task.model_dump()
+    task_data['task_id'] = uuid4()
+    task_data['org_id'] = project['org_id']
+    task_data['created_at'] = datetime.utcnow().isoformat()
+    task_data['updated_at'] = datetime.utcnow().isoformat()
+
+    created_task = SupabaseQuery.insert(
+        client=db,
+        table='tasks',
+        data=task_data
+    )
+
+    return created_task

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_signing_secret: str = ""
+    slack_user_token: str = ""  # User token to act as Athena Concierge user
 
     # AWS SES
     aws_access_key_id: str = ""

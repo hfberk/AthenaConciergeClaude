@@ -25,12 +25,19 @@ async def lifespan(app: FastAPI):
         logger.error("Database health check failed at startup!")
 
     # Start Slack integration in background thread
-    if settings.slack_bot_token and settings.slack_app_token:
-        logger.info("Starting Slack Socket Mode integration")
+    # Use user integration if user token is available, otherwise use bot integration
+    if settings.slack_user_token and settings.slack_app_token and settings.slack_bot_token:
+        logger.info("Starting Slack Socket Mode integration (User mode - as Athena Concierge)")
+        from app.integrations.slack_user import start_slack_user_integration
+        slack_thread = threading.Thread(target=start_slack_user_integration, daemon=True)
+        slack_thread.start()
+        logger.info("Slack user integration started in background thread")
+    elif settings.slack_bot_token and settings.slack_app_token:
+        logger.info("Starting Slack Socket Mode integration (Bot mode)")
         from app.integrations.slack import start_slack_integration
         slack_thread = threading.Thread(target=start_slack_integration, daemon=True)
         slack_thread.start()
-        logger.info("Slack integration started in background thread")
+        logger.info("Slack bot integration started in background thread")
     else:
         logger.warning("Slack credentials not configured, integration disabled")
 
