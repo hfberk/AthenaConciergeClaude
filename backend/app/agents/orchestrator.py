@@ -49,8 +49,8 @@ When you're uncertain or need staff approval for significant actions (booking ex
         This is the main entry point called by the API.
         """
         logger.info("Orchestrator processing message",
-                   person_id=str(person.person_id),
-                   conversation_id=str(conversation.conversation_id))
+                   person_id=str(person['person_id']),
+                   conversation_id=str(conversation['conversation_id']))
 
         # Execute agent with Claude
         response = self.execute(user_message, context)

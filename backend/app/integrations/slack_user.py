@@ -193,6 +193,7 @@ class SlackUserIntegration:
                     person = SupabaseQuery.get_by_id(
                         client=db,
                         table='persons',
+                        id_column='person_id',
                         id_value=comm_identity['person_id']
                     )
 
@@ -259,7 +260,7 @@ class SlackUserIntegration:
                     outbound_msg = SupabaseQuery.insert(db, 'messages', outbound_msg_data)
 
                     # Send response AS the Athena Concierge user
-                    self._send_as_user(channel, ai_response, thread_ts=event.get("ts"))
+                    self._send_as_user(channel, ai_response)
 
                     logger.info("Sent response as Athena Concierge user",
                                channel=channel,

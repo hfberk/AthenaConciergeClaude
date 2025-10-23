@@ -80,7 +80,11 @@ class SupabaseQuery:
                 query = query.eq(key, value)
 
         if order_by:
-            query = query.order(order_by)
+            # Parse order_by string (e.g., "column.desc" or "column.asc")
+            parts = order_by.split('.')
+            column = parts[0]
+            desc = len(parts) > 1 and parts[1] == 'desc'
+            query = query.order(column, desc=desc)
 
         if limit:
             query = query.limit(limit)
