@@ -236,7 +236,7 @@ CREATE INDEX idx_date_items_next_occurrence ON date_items(next_occurrence) WHERE
 CREATE TABLE reminder_rules (
     reminder_rule_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(org_id),
-    date_item_id UUID NOT NULL REFERENCES date_items(date_item_id),
+    date_item_id UUID REFERENCES date_items(date_item_id), -- Optional: NULL for generic reminders, populated for date-based reminders
     comm_identity_id UUID NOT NULL REFERENCES comm_identities(comm_identity_id),
     reminder_type VARCHAR(50) NOT NULL CHECK (reminder_type IN ('lead_time', 'scheduled')),
     lead_time_days INTEGER, -- For lead_time type: X days before

@@ -35,13 +35,71 @@ CAPABILITIES:
 
 PARSING GUIDELINES:
 When a user asks for a reminder, extract:
-- **action**: What to remind about (e.g., "call John", "birthday party planning")
-- **datetime**: When to send the reminder (ISO format with timezone)
+- **action**: What to remind about (e.g., "call John", "your dentist appointment")
+- **scheduled_datetime**: When to SEND the reminder (ISO format with timezone)
 - **recurrence**: If it's recurring (daily, weekly, monthly, yearly)
 - **advance_notice**: How far in advance (e.g., "2 days before", "1 week before")
 
+CRITICAL - HANDLING MULTIPLE TIME REFERENCES:
+Users may mention multiple times in one request. You must determine which time is for SENDING the reminder:
+- "Remind me in 5 minutes about my dentist appointment tomorrow"
+  → scheduled_datetime = now + 5 minutes (when to SEND reminder)
+  → action = "your dentist appointment tomorrow" (what to remind about)
+  → The word "tomorrow" describes the event, NOT when to send the reminder
+- "Remind me tomorrow about the party next week"
+  → scheduled_datetime = tomorrow (when to SEND reminder)
+  → action = "the party next week" (what to remind about)
+
+CALCULATING RELATIVE TIMES - STEP BY STEP:
+You will receive current_datetime in the context as an ISO format string with timezone.
+
+CRITICAL: You MUST use the EXACT date, time, AND TIMEZONE from current_datetime as your starting point!
+- current_datetime format: "2025-10-24T14:30:00-04:00" (Eastern) or "2025-10-24T14:30:00-05:00" (Eastern DST)
+- The date portion is: YYYY-MM-DD (e.g., 2025-10-24 means October 24, 2025)
+- The time portion is: HH:MM:SS (e.g., 14:30:00 means 2:30 PM)
+- The timezone portion is: ±HH:MM (e.g., -04:00 is Eastern Daylight Time)
+
+Calculate absolute datetimes from relative phrases by adding time to current_datetime:
+
+1. "in X minutes": Add X minutes to the TIME in current_datetime, keep same DATE and TIMEZONE
+   Example: current_datetime = "2025-10-24T14:30:00-04:00", user says "in 5 minutes"
+   Parse current: Date = 2025-10-24, Time = 14:30:00, TZ = -04:00
+   Add 5 minutes: 14:30 + 5 = 14:35
+   Return: "2025-10-24T14:35:00-04:00" (SAME DATE, SAME TIMEZONE)
+
+2. "in X hours": Add X hours to the TIME in current_datetime, keep same TIMEZONE
+   Example: current_datetime = "2025-10-24T14:30:00-04:00", user says "in 2 hours"
+   Parse current: Date = 2025-10-24, Time = 14:30:00, TZ = -04:00
+   Add 2 hours: 14:30 + 2h = 16:30 (if goes past midnight, increment date)
+   Return: "2025-10-24T16:30:00-04:00" (SAME TIMEZONE: -04:00)
+
+3. "tomorrow at X pm": Add 1 day to the DATE in current_datetime, use specified time, keep TIMEZONE
+   Example: current_datetime = "2025-10-24T14:30:00-04:00", user says "tomorrow at 3pm"
+   Parse current: Date = 2025-10-24, TZ = -04:00
+   Tomorrow: 2025-10-24 + 1 day = 2025-10-25
+   Time: 3pm = 15:00:00
+   Return: "2025-10-25T15:00:00-04:00" (NEXT DATE, SAME TIMEZONE)
+
+4. "in X days": Add X days to the DATE in current_datetime, keep same time and TIMEZONE
+   Example: current_datetime = "2025-10-24T14:30:00-04:00", user says "in 3 days"
+   Parse current: Date = 2025-10-24, Time = 14:30:00, TZ = -04:00
+   Add 3 days: 2025-10-24 + 3 = 2025-10-27
+   Return: "2025-10-27T14:30:00-04:00" (3 DAYS LATER, SAME TIMEZONE)
+
+WARNING: Do NOT use today's calendar date from your training! ONLY use the date from current_datetime!
+WARNING: ALWAYS preserve the timezone from current_datetime in your response!
+
+IMPORTANT DATETIME FORMAT REQUIREMENTS:
+- ALWAYS return datetime in ISO 8601 format: "YYYY-MM-DDTHH:MM:SS±HH:MM"
+- Use the SAME timezone as the current_datetime provided (typically the user's local timezone)
+- If current_datetime is "2025-10-24T14:30:00-04:00", your response must also use -04:00
+- If current_datetime is "2025-10-24T14:30:00-05:00", your response must also use -05:00
+- Use 24-hour format (15:00:00, not 3:00:00 PM)
+- Perform the actual calculation - do NOT return relative strings like "in 5 minutes"
+- If current_datetime has milliseconds (e.g., "2025-10-24T14:30:00.123456"), strip them in your output
+
 RESPONSE FORMAT:
-When parsing a reminder request, respond with a JSON object:
+When parsing a reminder request, respond with a JSON object ONLY. No additional text before or after:
 ```json
 {
   "action": "parsed_action",
@@ -68,24 +126,41 @@ For recurring reminders or date-based reminders:
 ```
 
 IMPORTANT:
+- ONLY return valid JSON. No explanations, no additional text
 - If the request is ambiguous, set needs_clarification=true and ask a clear question
-- Parse relative times ("tomorrow", "next week", "in 2 hours") into absolute datetimes
-- Use the context to understand references ("his birthday" -> look in context for whose)
-- Be conversational and friendly in confirmations
-- Current datetime is provided in context
+- Parse relative times ("tomorrow", "next week", "in 2 hours") into absolute datetimes using current_datetime from context
+- Use the user's timezone from context for datetime calculations
+- Use context to understand references ("his birthday" -> look in context for whose)
+- Current datetime is provided in context as "current_datetime"
+- User timezone is provided in context as "timezone"
 
-EXAMPLES:
+EXAMPLES (assume current_datetime = "2025-10-24T14:30:00-04:00" for all examples, Eastern timezone):
+
 User: "Remind me to call John tomorrow at 3pm"
-→ Parse: action="Call John", scheduled_datetime="2025-10-25T15:00:00+00:00"
+Context: current_datetime = "2025-10-24T14:30:00-04:00"
+→ {"action": "call John", "reminder_type": "scheduled", "scheduled_datetime": "2025-10-25T15:00:00-04:00"}
+
+User: "Remind me in 5 minutes about my dentist appointment tomorrow"
+Context: current_datetime = "2025-10-24T14:30:00-04:00"
+Calculation: 14:30:00 + 5 minutes = 14:35:00
+→ {"action": "your dentist appointment tomorrow", "reminder_type": "scheduled", "scheduled_datetime": "2025-10-24T14:35:00-04:00"}
+(Note: "in 5 minutes" determines scheduled_datetime, "tomorrow" describes the event)
 
 User: "Set a reminder for Mom's birthday 2 weeks before"
-→ Parse: Create date_item if not exists, reminder_type="lead_time", lead_time_days=14
+→ {"action": "Mom's birthday", "reminder_type": "lead_time", "lead_time_days": 14, "date_item_title": "Mom's Birthday", "create_date_item": true}
 
 User: "Remind me in 30 minutes"
-→ Parse: action="Check in", scheduled_datetime=now+30min
+Context: current_datetime = "2025-10-24T14:30:00-04:00"
+Calculation: 14:30:00 + 30 minutes = 15:00:00
+→ {"action": "check in", "reminder_type": "scheduled", "scheduled_datetime": "2025-10-24T15:00:00-04:00"}
+
+User: "Remind me in 2 hours"
+Context: current_datetime = "2025-10-24T14:30:00-04:00"
+Calculation: 14:30:00 + 2 hours = 16:30:00
+→ {"action": "check in", "reminder_type": "scheduled", "scheduled_datetime": "2025-10-24T16:30:00-04:00"}
 
 User: "Remind me about that thing"
-→ needs_clarification=true, ask "What would you like to be reminded about?"
+→ {"needs_clarification": true, "clarification_question": "What would you like to be reminded about, and when?"}
 """
 
     def process_reminder_request(
@@ -113,22 +188,56 @@ User: "Remind me about that thing"
             message=user_message
         )
 
+        # Get current datetime in user's timezone for parsing relative times
+        import pytz
+        user_tz_name = person.get('timezone', 'America/New_York')
+        try:
+            user_tz = pytz.timezone(user_tz_name)
+            # Get current time in user's timezone
+            current_dt_user_tz = datetime.now(user_tz)
+            current_dt_str = current_dt_user_tz.isoformat()
+        except Exception as e:
+            logger.warning(
+                "Failed to get user timezone, falling back to UTC",
+                timezone=user_tz_name,
+                error=str(e)
+            )
+            current_dt_str = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+            user_tz_name = 'UTC'
+
         # Add current datetime to context for parsing relative times
         enhanced_context = {
             **context,
-            "current_datetime": datetime.utcnow().isoformat(),
-            "timezone": person.get('timezone', 'UTC')
+            "current_datetime": current_dt_str,
+            "timezone": user_tz_name
         }
 
         # Use Claude to parse the reminder request
-        parse_prompt = f"""Parse this reminder request and extract the structured information:
+        current_dt = enhanced_context.get('current_datetime')
+        user_tz = enhanced_context.get('timezone', 'UTC')
+
+        parse_prompt = f"""CURRENT CONTEXT:
+- current_datetime: {current_dt}
+- timezone: {user_tz}
+
+Parse this reminder request and extract the structured information:
 
 "{user_message}"
+
+IMPORTANT: Use the current_datetime value above as your starting point for all relative time calculations.
 
 Respond with ONLY the JSON object as specified in the system prompt. No additional text."""
 
         try:
             response = self.execute(parse_prompt, enhanced_context)
+
+            # Log the raw response for debugging
+            logger.info(
+                "Raw Claude response for reminder parsing",
+                raw_response=response,
+                user_message=user_message,
+                current_datetime=enhanced_context.get('current_datetime')
+            )
 
             # Parse JSON response
             # Claude sometimes wraps JSON in ```json blocks, so clean it
@@ -143,11 +252,21 @@ Respond with ONLY the JSON object as specified in the system prompt. No addition
 
             parsed = json.loads(response_clean)
 
+            # Log the parsed result for debugging
+            logger.info(
+                "Successfully parsed reminder request",
+                action=parsed.get('action'),
+                reminder_type=parsed.get('reminder_type'),
+                scheduled_datetime=parsed.get('scheduled_datetime'),
+                user_message=user_message
+            )
+
         except json.JSONDecodeError as e:
             logger.error(
                 "Failed to parse Claude response as JSON",
                 error=str(e),
-                response=response
+                raw_response=response,
+                cleaned_response=response_clean if 'response_clean' in locals() else None
             )
             return "I had trouble understanding that reminder request. Could you please rephrase it? For example: 'Remind me to call Sarah tomorrow at 2pm'"
 
@@ -156,6 +275,27 @@ Respond with ONLY the JSON object as specified in the system prompt. No addition
             clarification = parsed.get('clarification_question',
                 "Could you provide more details about when you'd like to be reminded?")
             return clarification
+
+        # Validate that scheduled reminders have a datetime
+        if parsed.get('reminder_type') == 'scheduled':
+            if not parsed.get('scheduled_datetime'):
+                logger.error(
+                    "Scheduled reminder missing scheduled_datetime field",
+                    parsed_data=parsed,
+                    user_message=user_message
+                )
+                return "I understood you want a reminder, but I couldn't determine when to send it. Could you specify the time? For example: 'in 10 minutes' or 'tomorrow at 3pm'"
+
+            # Validate the datetime format and value
+            validation_error = self._validate_datetime(parsed['scheduled_datetime'])
+            if validation_error:
+                logger.warning(
+                    "Invalid datetime in parsed reminder",
+                    datetime=parsed['scheduled_datetime'],
+                    error=validation_error,
+                    user_message=user_message
+                )
+                return f"I had trouble understanding the timing. {validation_error} Could you please specify when you'd like to be reminded? For example: 'in 10 minutes' or 'tomorrow at 3pm'"
 
         # Create the reminder
         try:
@@ -174,6 +314,67 @@ Respond with ONLY the JSON object as specified in the system prompt. No addition
                 exc_info=True
             )
             return "I encountered an error while setting up your reminder. Please try again or contact support if the issue persists."
+
+    def _validate_datetime(self, scheduled_datetime: str) -> str:
+        """
+        Validate that the scheduled datetime makes sense.
+
+        Returns:
+            str: Error message if invalid, empty string if valid
+        """
+        # First, check if it looks like a datetime string
+        if not scheduled_datetime or not isinstance(scheduled_datetime, str):
+            logger.error(
+                "Invalid scheduled_datetime type",
+                scheduled_datetime=scheduled_datetime,
+                type=type(scheduled_datetime).__name__
+            )
+            return "The time format is invalid (not a string)."
+
+        # Check if it looks like a relative time expression instead of absolute
+        relative_phrases = ["in ", "from now", "later", "minutes", "hours", "days"]
+        if any(phrase in scheduled_datetime.lower() for phrase in relative_phrases):
+            logger.error(
+                "Received relative time expression instead of absolute datetime",
+                scheduled_datetime=scheduled_datetime
+            )
+            return "The time must be in absolute format (YYYY-MM-DDTHH:MM:SS+00:00), not relative."
+
+        try:
+            # Try parsing with timezone
+            dt = datetime.fromisoformat(scheduled_datetime.replace('Z', '+00:00'))
+
+            # Make 'now' timezone-aware for proper comparison
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+
+            # Check if datetime is in the past (with 1 minute grace period for processing delays)
+            grace_period = timedelta(minutes=1)
+            if dt < now - grace_period:
+                return "That time is in the past."
+
+            # Check if datetime is too far in the future (more than 1 year)
+            one_year = timedelta(days=365)
+            if dt > now + one_year:
+                return "That time is more than a year away. Please provide a date within the next year."
+
+            return ""  # Valid
+
+        except ValueError as e:
+            logger.error(
+                "Failed to parse datetime - invalid ISO format",
+                scheduled_datetime=scheduled_datetime,
+                error=str(e)
+            )
+            return "The time format is incorrect. Expected format: YYYY-MM-DDTHH:MM:SS+00:00"
+        except Exception as e:
+            logger.error(
+                "Unexpected error validating datetime",
+                scheduled_datetime=scheduled_datetime,
+                error=str(e),
+                exc_info=True
+            )
+            return "Unable to parse the time format."
 
     def _create_reminder(
         self,
@@ -355,13 +556,37 @@ Respond with ONLY the JSON object as specified in the system prompt. No addition
         if reminder_data.get('scheduled_datetime'):
             # Format datetime in friendly way
             dt = datetime.fromisoformat(reminder_data['scheduled_datetime'].replace('Z', '+00:00'))
-            time_str = dt.strftime('%B %d at %I:%M %p')
-            return f"Got it! I'll remind you to {action} on {time_str}."
+
+            # Use timezone-aware datetime for comparison
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+
+            # Calculate time difference for more natural language
+            time_diff = dt - now
+
+            # Format based on how soon the reminder is
+            if time_diff.total_seconds() < 3600:  # Less than 1 hour
+                minutes = int(time_diff.total_seconds() / 60)
+                if minutes <= 1:
+                    time_str = "in about a minute"
+                else:
+                    time_str = f"in {minutes} minutes"
+            elif time_diff.total_seconds() < 86400:  # Less than 1 day
+                hours = int(time_diff.total_seconds() / 3600)
+                if hours == 1:
+                    time_str = "in about an hour"
+                else:
+                    time_str = f"in {hours} hours"
+            else:
+                # For future dates, use the full date/time
+                time_str = f"on {dt.strftime('%B %d at %I:%M %p')}"
+
+            return f"Got it! I'll remind you about {action} {time_str}."
         elif reminder_data.get('lead_time_days'):
             days = reminder_data['lead_time_days']
             return f"Perfect! I'll remind you about {action} {days} days in advance."
         else:
-            return f"Reminder set! I'll remind you to {action}."
+            return f"Reminder set! I'll remind you about {action}."
 
     def list_reminders(self, person: dict) -> str:
         """List all pending reminders for a person"""

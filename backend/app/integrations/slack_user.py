@@ -54,6 +54,13 @@ class SlackUserIntegration:
 
         self._register_handlers()
 
+    # Blocked channels - ignore ALL events from these channels
+    BLOCKED_CHANNELS = ["CBKLDP1A6"]
+
+    def _is_blocked_channel(self, channel: str) -> bool:
+        """Check if a channel is blocked"""
+        return channel in self.BLOCKED_CHANNELS
+
     def _register_handlers(self):
         """Register Slack event handlers"""
 
@@ -61,19 +68,46 @@ class SlackUserIntegration:
         def handle_message(event, say, client):
             """Handle messages in channels where Athena Concierge user is present"""
             try:
+                # FIRST: Ignore ALL events from blocked channels
+                if self._is_blocked_channel(event.get("channel")):
+                    logger.debug(
+                        "Ignoring message from blocked channel",
+                        channel=event.get("channel")
+                    )
+                    return
+
                 # Ignore message subtypes (edited, deleted, etc.) - only process new messages
                 if event.get("subtype") is not None:
-                    logger.debug("Ignoring message with subtype", subtype=event.get("subtype"))
+                    subtype = event.get("subtype")
+                    logger.warning(
+                        "DIAGNOSTIC: Filtering message with subtype - THIS MAY BE THE BUG",
+                        subtype=subtype,
+                        user=event.get("user"),
+                        channel=event.get("channel"),
+                        text_preview=event.get("text", "")[:100] if event.get("text") else None,
+                        bot_id=event.get("bot_id"),
+                        full_event_keys=list(event.keys())
+                    )
                     return
 
                 # Ignore messages from the Athena Concierge user itself to prevent loops
                 if event.get("user") == self.user_id:
-                    logger.debug("Ignoring message from Athena Concierge user itself")
+                    logger.info(
+                        "DIAGNOSTIC: Filtering self-message (correct behavior)",
+                        self_user_id=self.user_id,
+                        channel=event.get("channel"),
+                        text_preview=event.get("text", "")[:100] if event.get("text") else None
+                    )
                     return
 
                 # Ignore other bot messages
                 if event.get("bot_id"):
-                    logger.debug("Ignoring bot message")
+                    logger.info(
+                        "DIAGNOSTIC: Filtering bot message",
+                        bot_id=event.get("bot_id"),
+                        user=event.get("user"),
+                        channel=event.get("channel")
+                    )
                     return
 
                 # Get message details
@@ -99,14 +133,25 @@ class SlackUserIntegration:
                 # 1. Direct messages (DMs)
                 # 2. Messages where Athena Concierge is @mentioned
                 if not is_dm and not user_mentioned:
-                    logger.debug("Ignoring message - not a DM and user not mentioned",
-                               channel=channel,
-                               is_dm=is_dm,
-                               mentioned=user_mentioned)
+                    logger.info(
+                        "DIAGNOSTIC: Ignoring message - not a DM and user not mentioned",
+                        channel=channel,
+                        is_dm=is_dm,
+                        mentioned=user_mentioned,
+                        text_preview=text[:100] if text else None
+                    )
                     return
 
                 # Remove the mention from the text if present
                 clean_text = text.replace(f"<@{self.user_id}>", "").strip()
+
+                logger.info(
+                    "✅ DIAGNOSTIC: Message passed all filters - PROCESSING",
+                    user_id=user_id,
+                    channel=channel,
+                    is_dm=is_dm,
+                    text_preview=clean_text[:100]
+                )
 
                 # Look up or create person by Slack ID
                 with get_db_context() as db:
@@ -319,6 +364,46 @@ class SlackUserIntegration:
                                error=str(send_error),
                                exc_info=True,
                                channel=event.get("channel"))
+
+        @self.app.event("reaction_added")
+        def handle_reaction_added(event, logger):
+            """Handle reaction_added events - just ignore them for blocked channels"""
+            try:
+                # Ignore reactions from blocked channels
+                if self._is_blocked_channel(event.get("item", {}).get("channel")):
+                    logger.debug(
+                        "Ignoring reaction from blocked channel",
+                        channel=event.get("item", {}).get("channel")
+                    )
+                    return
+
+                # For now, we don't process reactions - just acknowledge them
+                logger.debug("Reaction added event received", event=event)
+
+            except Exception as e:
+                logger.error("Error handling reaction_added event",
+                           error=str(e),
+                           exc_info=True)
+
+        @self.app.event("reaction_removed")
+        def handle_reaction_removed(event, logger):
+            """Handle reaction_removed events - just ignore them for blocked channels"""
+            try:
+                # Ignore reactions from blocked channels
+                if self._is_blocked_channel(event.get("item", {}).get("channel")):
+                    logger.debug(
+                        "Ignoring reaction removal from blocked channel",
+                        channel=event.get("item", {}).get("channel")
+                    )
+                    return
+
+                # For now, we don't process reactions - just acknowledge them
+                logger.debug("Reaction removed event received", event=event)
+
+            except Exception as e:
+                logger.error("Error handling reaction_removed event",
+                           error=str(e),
+                           exc_info=True)
 
     def _send_as_user(self, channel: str, text: str, thread_ts: str = None):
         """Send a message as the Athena Concierge user"""

@@ -458,16 +458,23 @@ CREATE POLICY date_items_delete_policy ON date_items
     )
   );
 
--- Reminder Rules: Linked to date items
+-- Reminder Rules: Linked to date items OR comm_identity (for generic reminders)
 CREATE POLICY reminder_rules_select_policy ON reminder_rules
   FOR SELECT
   USING (
     org_id = public.user_org_id() AND (
+      -- Admins and staff can see all reminders
       public.user_account_type() IN ('admin', 'concierge', 'analyst') OR
-      date_item_id IN (
+      -- Users can see reminders for their own date items
+      (date_item_id IS NOT NULL AND date_item_id IN (
         SELECT date_item_id FROM date_items
         WHERE person_id = public.user_person_id()
-      )
+      )) OR
+      -- Users can see generic reminders (NULL date_item_id) linked to their comm_identity
+      (date_item_id IS NULL AND comm_identity_id IN (
+        SELECT comm_identity_id FROM comm_identities
+        WHERE person_id = public.user_person_id()
+      ))
     )
   );
 
