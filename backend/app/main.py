@@ -41,6 +41,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Slack credentials not configured, integration disabled")
 
+    # Start background workers
+    logger.info("Starting background workers")
+
+    # Reminder worker (runs every 5 minutes)
+    from app.workers.reminder_worker import run_reminder_worker
+    reminder_thread = threading.Thread(target=run_reminder_worker, daemon=True)
+    reminder_thread.start()
+    logger.info("Reminder worker started in background thread")
+
+    # Proactive worker (runs daily)
+    from app.workers.proactive_worker import run_proactive_worker
+    proactive_thread = threading.Thread(target=run_proactive_worker, daemon=True)
+    proactive_thread.start()
+    logger.info("Proactive worker started in background thread")
+
     yield
 
     # Shutdown

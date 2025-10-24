@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Vector Search
     vector_dimensions: int = 1536
 
+    # Background Workers
+    reminder_check_interval: int = 300  # 5 minutes (in seconds)
+    proactive_check_interval: int = 86400  # 24 hours (in seconds)
+
     class Config:
         env_file = ".env"
         case_sensitive = False

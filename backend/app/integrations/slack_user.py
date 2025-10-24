@@ -184,10 +184,38 @@ class SlackUserIntegration:
                         comm_identity = SupabaseQuery.insert(db, 'comm_identities', comm_identity_data)
                         logger.info("Created Slack identity", comm_identity_id=comm_identity['comm_identity_id'])
 
+                        # Create conversation for the new user
+                        conversation_data = {
+                            'conversation_id': str(uuid4()),
+                            'org_id': person['org_id'],
+                            'person_id': person['person_id'],
+                            'channel_type': 'slack',
+                            'external_thread_id': channel,
+                            'status': 'active',
+                            'created_at': datetime.utcnow().isoformat(),
+                            'updated_at': datetime.utcnow().isoformat()
+                        }
+                        conversation = SupabaseQuery.insert(db, 'conversations', conversation_data)
+                        logger.info("Created conversation for new user", conversation_id=conversation['conversation_id'])
+
                         # Welcome message for new users (sent as Athena Concierge user)
                         welcome_msg = f"Hello {display_name.split()[0]}! Welcome to Athena Concierge. I'm here to assist you. How can I help you today?"
                         self._send_as_user(channel, welcome_msg)
-                        return  # Don't process further, just send welcome
+
+                        # Save welcome message to conversation
+                        welcome_msg_data = {
+                            'message_id': str(uuid4()),
+                            'org_id': person['org_id'],
+                            'conversation_id': conversation['conversation_id'],
+                            'direction': 'outbound',
+                            'agent_name': 'system',
+                            'content_text': welcome_msg,
+                            'created_at': datetime.utcnow().isoformat()
+                        }
+                        SupabaseQuery.insert(db, 'messages', welcome_msg_data)
+
+                        # Continue processing the first message instead of returning early
+                        logger.info("Processing first message from new user")
 
                     # Fetch person from comm_identity
                     person = SupabaseQuery.get_by_id(
@@ -202,6 +230,7 @@ class SlackUserIntegration:
                         client=db,
                         table='conversations',
                         filters={
+                            'person_id': person['person_id'],
                             'channel_type': 'slack',
                             'external_thread_id': channel
                         },
@@ -209,7 +238,14 @@ class SlackUserIntegration:
                     )
                     conversation = conversations[0] if conversations else None
 
-                    if not conversation:
+                    if conversation:
+                        logger.info("Found existing conversation",
+                                   conversation_id=conversation['conversation_id'],
+                                   person_id=person['person_id'])
+                    else:
+                        logger.info("Creating new conversation",
+                                   person_id=person['person_id'],
+                                   channel=channel)
                         conversation_data = {
                             'conversation_id': str(uuid4()),
                             'org_id': person['org_id'],
@@ -267,15 +303,22 @@ class SlackUserIntegration:
                                response_length=len(ai_response))
 
             except Exception as e:
-                logger.error("Error handling Slack message", error=str(e), exc_info=True)
+                logger.error("Error handling Slack message",
+                           error=str(e),
+                           exc_info=True,
+                           channel=event.get("channel"),
+                           user_id=event.get("user"))
                 # Send error message as the user
                 try:
                     self._send_as_user(
                         event.get("channel"),
                         "I apologize, but I encountered an error processing your message. Please try again."
                     )
-                except:
-                    pass
+                except Exception as send_error:
+                    logger.error("Failed to send error message to user",
+                               error=str(send_error),
+                               exc_info=True,
+                               channel=event.get("channel"))
 
     def _send_as_user(self, channel: str, text: str, thread_ts: str = None):
         """Send a message as the Athena Concierge user"""
@@ -292,6 +335,75 @@ class SlackUserIntegration:
             return response
         except Exception as e:
             logger.error("Failed to send message as user", error=str(e), exc_info=True)
+            raise
+
+    def send_proactive_message(self, channel: str, text: str, thread_ts: str = None):
+        """
+        Public method for sending proactive messages as Athena Concierge user.
+        Used by ProactiveMessagingService and agents for scheduled/proactive communication.
+
+        Args:
+            channel: Slack channel ID (DM or channel)
+            text: Message text to send
+            thread_ts: Optional thread timestamp for threaded replies
+
+        Returns:
+            Slack API response
+
+        Raises:
+            Exception: If message sending fails
+        """
+        if not self.user_client:
+            raise RuntimeError("Slack user client not initialized")
+
+        logger.info(
+            "Sending proactive Slack message",
+            channel=channel,
+            message_length=len(text),
+            is_threaded=bool(thread_ts)
+        )
+
+        return self._send_as_user(channel=channel, text=text, thread_ts=thread_ts)
+
+    def get_dm_channel(self, slack_user_id: str) -> str:
+        """
+        Get or open a DM channel with a Slack user.
+
+        Args:
+            slack_user_id: Slack user ID (e.g., U1234567890)
+
+        Returns:
+            str: DM channel ID (e.g., D1234567890)
+
+        Raises:
+            Exception: If DM channel cannot be opened
+        """
+        if not self.user_client:
+            raise RuntimeError("Slack user client not initialized")
+
+        try:
+            # Open DM channel (returns existing if already open)
+            response = self.user_client.conversations_open(users=slack_user_id)
+
+            if not response['ok']:
+                raise RuntimeError(f"Failed to open DM channel: {response.get('error')}")
+
+            dm_channel_id = response['channel']['id']
+            logger.debug(
+                "Opened Slack DM channel",
+                slack_user_id=slack_user_id,
+                dm_channel_id=dm_channel_id
+            )
+
+            return dm_channel_id
+
+        except Exception as e:
+            logger.error(
+                "Failed to get Slack DM channel",
+                slack_user_id=slack_user_id,
+                error=str(e),
+                exc_info=True
+            )
             raise
 
     def start(self):

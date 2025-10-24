@@ -72,20 +72,16 @@ Example: "Hi Sarah! Just a reminder that John's birthday is coming up on March 1
     def _send_reminder(self, reminder: dict):
         """Send a single reminder"""
         # Fetch related entities
-        date_item = SupabaseQuery.get_by_id(
-            client=self.db,
-            table='date_items',
-            id_column='date_item_id',
-            id_value=reminder['date_item_id']
-        )
+        date_item = None
+        if reminder.get('date_item_id'):
+            date_item = SupabaseQuery.get_by_id(
+                client=self.db,
+                table='date_items',
+                id_column='date_item_id',
+                id_value=reminder['date_item_id']
+            )
 
-        person = SupabaseQuery.get_by_id(
-            client=self.db,
-            table='persons',
-            id_column='person_id',
-            id_value=date_item['person_id']
-        )
-
+        # Get person from comm_identity
         comm_identity = SupabaseQuery.get_by_id(
             client=self.db,
             table='comm_identities',
@@ -93,9 +89,16 @@ Example: "Hi Sarah! Just a reminder that John's birthday is coming up on March 1
             id_value=reminder['comm_identity_id']
         )
 
+        person = SupabaseQuery.get_by_id(
+            client=self.db,
+            table='persons',
+            id_column='person_id',
+            id_value=comm_identity['person_id']
+        )
+
         logger.info("Sending reminder",
                    person_id=str(person['person_id']),
-                   date_item=date_item.get('title'),
+                   date_item=date_item.get('title') if date_item else 'General reminder',
                    channel=comm_identity.get('channel_type'))
 
         # Build context for reminder
@@ -103,19 +106,20 @@ Example: "Hi Sarah! Just a reminder that John's birthday is coming up on March 1
         context_builder = ContextBuilder(self.db)
         context = context_builder.build_context(person['person_id'])
 
-        # Fetch category if present
-        category_name = 'N/A'
-        if date_item.get('date_category_id'):
-            category = SupabaseQuery.get_by_id(
-                client=self.db,
-                table='date_categories',
-                id_column='date_category_id',
-                id_value=date_item['date_category_id']
-            )
-            category_name = category.get('category_name') if category else 'N/A'
+        # Generate reminder message using Claude
+        if date_item:
+            # Fetch category if present
+            category_name = 'N/A'
+            if date_item.get('date_category_id'):
+                category = SupabaseQuery.get_by_id(
+                    client=self.db,
+                    table='date_categories',
+                    id_column='date_category_id',
+                    id_value=date_item['date_category_id']
+                )
+                category_name = category.get('category_name') if category else 'N/A'
 
-        # Generate reminder message
-        reminder_request = f"""Generate a reminder message for this important date:
+            reminder_request = f"""Generate a reminder message for this important date:
 - Title: {date_item.get('title')}
 - Date: {date_item.get('next_occurrence') or date_item.get('date_value')}
 - Category: {category_name}
@@ -123,57 +127,48 @@ Example: "Hi Sarah! Just a reminder that John's birthday is coming up on March 1
 
 Use the client's context to personalize the reminder and suggest helpful next steps.
 """
+        else:
+            # Generic reminder (created via reminder management)
+            action = reminder.get('metadata_jsonb', {}).get('action', 'your reminder')
+            reminder_request = f"""Generate a friendly reminder message:
+
+Reminder: {action}
+
+Use the client's context to personalize this reminder. Keep it concise and helpful.
+"""
 
         reminder_message = self.execute(reminder_request, context)
 
-        # Create or get conversation for reminders
-        conversations = SupabaseQuery.select_active(
-            client=self.db,
-            table='conversations',
-            filters={
-                'person_id': person['person_id'],
-                'channel_type': comm_identity.get('channel_type'),
-                'subject': 'Reminders'
-            },
-            limit=1
-        )
-        conversation = conversations[0] if conversations else None
+        # Send via ProactiveMessagingService
+        from app.services.proactive_messaging import ProactiveMessagingService
+        messaging_service = ProactiveMessagingService(self.db)
 
-        if not conversation:
-            conversation_data = {
-                'conversation_id': str(uuid4()),
-                'org_id': person['org_id'],
-                'person_id': person['person_id'],
-                'channel_type': comm_identity.get('channel_type'),
-                'subject': 'Reminders',
-                'status': 'active',
-                'created_at': datetime.utcnow().isoformat(),
-                'updated_at': datetime.utcnow().isoformat()
-            }
-            conversation = SupabaseQuery.insert(self.db, 'conversations', conversation_data)
+        try:
+            messaging_service.send_to_person(
+                person_id=person['person_id'],
+                message_text=reminder_message,
+                agent_name='reminder',
+                channel_type=comm_identity.get('channel_type'),
+                subject='Reminder' if date_item else None
+            )
 
-        # Save message
-        message_data = {
-            'message_id': str(uuid4()),
-            'org_id': person['org_id'],
-            'conversation_id': conversation['conversation_id'],
-            'direction': 'outbound',
-            'agent_name': 'reminder',
-            'content_text': reminder_message,
-            'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
-        }
-        message = SupabaseQuery.insert(self.db, 'messages', message_data)
+            # Mark reminder as sent
+            SupabaseQuery.update(
+                client=self.db,
+                table='reminder_rules',
+                id_column='reminder_rule_id',
+                id_value=reminder['reminder_rule_id'],
+                data={'sent_at': datetime.utcnow().isoformat()}
+            )
 
-        # Mark reminder as sent
-        SupabaseQuery.update(
-            client=self.db,
-            table='reminder_rules',
-            id_column='reminder_rule_id',
-            id_value=reminder['reminder_rule_id'],
-            data={'sent_at': datetime.utcnow().isoformat()}
-        )
+            logger.info("Reminder sent successfully",
+                       person_id=str(person['person_id']),
+                       reminder_id=str(reminder['reminder_rule_id']))
 
-        # TODO: Actually send via Slack/Email/SMS
-        logger.info("Reminder sent successfully",
-                   message_id=str(message['message_id']))
+        except Exception as e:
+            logger.error("Failed to send reminder",
+                        reminder_id=str(reminder['reminder_rule_id']),
+                        error=str(e),
+                        exc_info=True)
+            # Don't mark as sent if delivery failed
+            raise
