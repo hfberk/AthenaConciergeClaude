@@ -8,7 +8,12 @@
       "Read(//tmp/**)",
       "Bash(timeout 10 python:*)",
       "Bash(pkill:*)",
-      "Bash(timeout 30 python:*)"
+      "Bash(timeout 30 python:*)",
+      "Bash(curl:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(echo:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
