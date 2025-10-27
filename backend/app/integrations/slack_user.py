@@ -153,7 +153,7 @@ class SlackUserIntegration:
                     text_preview=clean_text[:100]
                 )
 
-                # Look up or create person by Slack ID
+                # Look up person by Slack ID (must be pre-registered)
                 with get_db_context() as db:
                     # Query CommIdentity by Slack ID
                     comm_identities = SupabaseQuery.select_active(
@@ -167,100 +167,15 @@ class SlackUserIntegration:
                     )
                     comm_identity = comm_identities[0] if comm_identities else None
 
-                    # Auto-create user if not found
+                    # Only serve pre-registered clients - ignore unregistered users
                     if not comm_identity:
-                        logger.info("New Slack user detected, auto-creating", user_id=user_id)
-
-                        # Get user info from Slack
-                        try:
-                            user_info = client.users_info(user=user_id)
-                            slack_user = user_info.get("user", {})
-                            display_name = slack_user.get("real_name") or slack_user.get("name") or f"Slack User {user_id}"
-                            email = slack_user.get("profile", {}).get("email")
-                        except Exception as e:
-                            logger.warning("Could not fetch Slack user info", error=str(e))
-                            display_name = f"Slack User {user_id}"
-                            email = None
-
-                        # Use default org (first org in database, or create one)
-                        orgs = SupabaseQuery.select_active(
-                            client=db,
-                            table='organizations',
-                            limit=1
+                        logger.info(
+                            "Message from unregistered Slack user - ignoring (only pre-registered clients are served)",
+                            user_id=user_id,
+                            channel=channel,
+                            text_preview=clean_text[:50]
                         )
-                        default_org = orgs[0] if orgs else None
-
-                        if not default_org:
-                            # Create default organization
-                            org_data = {
-                                'org_id': str(uuid4()),
-                                'name': 'Default Organization',
-                                'settings_jsonb': {},
-                                'created_at': datetime.utcnow().isoformat(),
-                                'updated_at': datetime.utcnow().isoformat()
-                            }
-                            default_org = SupabaseQuery.insert(db, 'organizations', org_data)
-                            logger.info("Created default organization", org_id=default_org['org_id'])
-
-                        # Create person
-                        person_data = {
-                            'person_id': str(uuid4()),
-                            'org_id': default_org['org_id'],
-                            'person_type': 'client',
-                            'full_name': display_name,
-                            'preferred_name': display_name.split()[0] if display_name else 'there',
-                            'created_at': datetime.utcnow().isoformat(),
-                            'updated_at': datetime.utcnow().isoformat()
-                        }
-                        person = SupabaseQuery.insert(db, 'persons', person_data)
-                        logger.info("Created new person", person_id=person['person_id'])
-
-                        # Create comm identity
-                        comm_identity_data = {
-                            'comm_identity_id': str(uuid4()),
-                            'org_id': default_org['org_id'],
-                            'person_id': person['person_id'],
-                            'channel_type': 'slack',
-                            'identity_value': user_id,
-                            'is_primary': True,
-                            'created_at': datetime.utcnow().isoformat(),
-                            'updated_at': datetime.utcnow().isoformat()
-                        }
-                        comm_identity = SupabaseQuery.insert(db, 'comm_identities', comm_identity_data)
-                        logger.info("Created Slack identity", comm_identity_id=comm_identity['comm_identity_id'])
-
-                        # Create conversation for the new user
-                        conversation_data = {
-                            'conversation_id': str(uuid4()),
-                            'org_id': person['org_id'],
-                            'person_id': person['person_id'],
-                            'channel_type': 'slack',
-                            'external_thread_id': channel,
-                            'status': 'active',
-                            'created_at': datetime.utcnow().isoformat(),
-                            'updated_at': datetime.utcnow().isoformat()
-                        }
-                        conversation = SupabaseQuery.insert(db, 'conversations', conversation_data)
-                        logger.info("Created conversation for new user", conversation_id=conversation['conversation_id'])
-
-                        # Welcome message for new users (sent as Athena Concierge user)
-                        welcome_msg = f"Hello {display_name.split()[0]}! Welcome to Athena Concierge. I'm here to assist you. How can I help you today?"
-                        self._send_as_user(channel, welcome_msg)
-
-                        # Save welcome message to conversation
-                        welcome_msg_data = {
-                            'message_id': str(uuid4()),
-                            'org_id': person['org_id'],
-                            'conversation_id': conversation['conversation_id'],
-                            'direction': 'outbound',
-                            'agent_name': 'system',
-                            'content_text': welcome_msg,
-                            'created_at': datetime.utcnow().isoformat()
-                        }
-                        SupabaseQuery.insert(db, 'messages', welcome_msg_data)
-
-                        # Continue processing the first message instead of returning early
-                        logger.info("Processing first message from new user")
+                        return
 
                     # Fetch person from comm_identity
                     person = SupabaseQuery.get_by_id(
