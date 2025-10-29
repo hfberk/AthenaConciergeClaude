@@ -1,9 +1,10 @@
 """Context builder for assembling comprehensive client context for agents"""
 
 from uuid import UUID
-from sqlalchemy.orm import Session
+from supabase import Client
 from datetime import datetime, timedelta
 import structlog
+from app.utils.supabase_helpers import SupabaseQuery
 
 logger = structlog.get_logger()
 
@@ -11,7 +12,7 @@ logger = structlog.get_logger()
 class ContextBuilder:
     """Builds comprehensive context for AI agents"""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Client):
         self.db = db
 
     def build_context(self, person_id: UUID, conversation_id: UUID | None = None) -> dict:
@@ -39,51 +40,59 @@ class ContextBuilder:
 
     def _get_person_profile(self, person_id: UUID) -> dict:
         """Get person profile with basic information"""
-        from app.models.identity import Person
-
-        person = self.db.query(Person).filter(
-            Person.person_id == person_id,
-            Person.deleted_at.is_(None)
-        ).first()
+        person = SupabaseQuery.get_by_id(
+            client=self.db,
+            table='persons',
+            id_column='person_id',
+            id_value=person_id
+        )
 
         if not person:
             return {}
 
         return {
-            "person_id": str(person.person_id),
-            "full_name": person.full_name,
-            "preferred_name": person.preferred_name or person.full_name.split()[0],
-            "person_type": person.person_type,
-            "timezone": person.timezone,
-            "metadata": person.metadata_jsonb or {}
+            "person_id": str(person['person_id']),
+            "full_name": person.get('full_name'),
+            "preferred_name": person.get('preferred_name') or person.get('full_name', '').split()[0] if person.get('full_name') else '',
+            "person_type": person.get('person_type'),
+            "timezone": person.get('timezone'),
+            "metadata": person.get('metadata_jsonb') or {}
         }
 
     def _get_households(self, person_id: UUID) -> list:
         """Get household memberships and addresses"""
-        from app.models.household import HouseholdMember, Household, Address
-
-        memberships = self.db.query(HouseholdMember).filter(
-            HouseholdMember.person_id == person_id,
-            HouseholdMember.deleted_at.is_(None)
-        ).all()
+        memberships = SupabaseQuery.select_active(
+            client=self.db,
+            table='household_members',
+            filters={'person_id': str(person_id)}
+        )
 
         households = []
         for membership in memberships:
-            household = membership.household
-            if household and not household.deleted_at:
-                addresses = self.db.query(Address).filter(
-                    Address.household_id == household.household_id,
-                    Address.deleted_at.is_(None)
-                ).all()
+            # Fetch household for this membership
+            household = SupabaseQuery.get_by_id(
+                client=self.db,
+                table='households',
+                id_column='household_id',
+                id_value=membership['household_id']
+            )
+
+            if household:
+                # Fetch addresses for this household
+                addresses = SupabaseQuery.select_active(
+                    client=self.db,
+                    table='addresses',
+                    filters={'household_id': membership['household_id']}
+                )
 
                 households.append({
-                    "household_name": household.household_name,
-                    "household_type": household.household_type,
-                    "relationship": membership.relationship_to_primary,
+                    "household_name": household.get('household_name'),
+                    "household_type": household.get('household_type'),
+                    "relationship": membership.get('relationship_to_primary'),
                     "addresses": [
                         {
-                            "label": addr.label,
-                            "address": addr.address_jsonb
+                            "label": addr.get('label'),
+                            "address": addr.get('address_jsonb')
                         }
                         for addr in addresses
                     ]
@@ -93,39 +102,47 @@ class ContextBuilder:
 
     def _get_recent_conversations(self, person_id: UUID, current_conversation_id: UUID | None = None) -> list:
         """Get recent conversation history (sliding window)"""
-        from app.models.communication import Conversation, Message
-
         # Get last 3 conversations (excluding current)
-        query = self.db.query(Conversation).filter(
-            Conversation.person_id == person_id,
-            Conversation.deleted_at.is_(None)
+        # Note: Supabase doesn't support != filter, so we'll fetch and filter in Python
+        all_conversations = SupabaseQuery.select_active(
+            client=self.db,
+            table='conversations',
+            filters={'person_id': str(person_id)},
+            order_by='updated_at.desc',
+            limit=10  # Fetch a few extra to account for filtering
         )
 
+        # Filter out current conversation if needed
         if current_conversation_id:
-            query = query.filter(Conversation.conversation_id != current_conversation_id)
-
-        recent_conversations = query.order_by(
-            Conversation.updated_at.desc()
-        ).limit(3).all()
+            recent_conversations = [
+                conv for conv in all_conversations
+                if conv['conversation_id'] != str(current_conversation_id)
+            ][:3]
+        else:
+            recent_conversations = all_conversations[:3]
 
         conversations = []
         for conv in recent_conversations:
             # Get last 5 messages from each conversation
-            messages = self.db.query(Message).filter(
-                Message.conversation_id == conv.conversation_id,
-                Message.deleted_at.is_(None)
-            ).order_by(Message.created_at.desc()).limit(5).all()
+            # Note: We need to order desc and then reverse
+            messages = SupabaseQuery.select_active(
+                client=self.db,
+                table='messages',
+                filters={'conversation_id': conv['conversation_id']},
+                order_by='created_at.desc',
+                limit=5
+            )
 
             conversations.append({
-                "conversation_id": str(conv.conversation_id),
-                "subject": conv.subject,
-                "channel_type": conv.channel_type,
-                "updated_at": conv.updated_at.isoformat(),
+                "conversation_id": str(conv['conversation_id']),
+                "subject": conv.get('subject'),
+                "channel_type": conv.get('channel_type'),
+                "updated_at": conv.get('updated_at'),
                 "messages": [
                     {
-                        "direction": msg.direction,
-                        "content": msg.content_text,
-                        "created_at": msg.created_at.isoformat()
+                        "direction": msg.get('direction'),
+                        "content": msg.get('content_text'),
+                        "created_at": msg.get('created_at')
                     }
                     for msg in reversed(messages)
                 ]
@@ -133,10 +150,12 @@ class ContextBuilder:
 
         # Get messages from current conversation if provided
         if current_conversation_id:
-            current_messages = self.db.query(Message).filter(
-                Message.conversation_id == current_conversation_id,
-                Message.deleted_at.is_(None)
-            ).order_by(Message.created_at).all()
+            current_messages = SupabaseQuery.select_active(
+                client=self.db,
+                table='messages',
+                filters={'conversation_id': str(current_conversation_id)},
+                order_by='created_at.asc'
+            )
 
             conversations.insert(0, {
                 "conversation_id": str(current_conversation_id),
@@ -145,9 +164,9 @@ class ContextBuilder:
                 "is_current": True,
                 "messages": [
                     {
-                        "direction": msg.direction,
-                        "content": msg.content_text,
-                        "created_at": msg.created_at.isoformat()
+                        "direction": msg.get('direction'),
+                        "content": msg.get('content_text'),
+                        "created_at": msg.get('created_at')
                     }
                     for msg in current_messages
                 ]
@@ -157,61 +176,82 @@ class ContextBuilder:
 
     def _get_upcoming_dates(self, person_id: UUID, days_ahead: int = 90) -> list:
         """Get upcoming important dates"""
-        from app.models.dates import DateItem, DateCategory
+        cutoff_date = (datetime.now().date() + timedelta(days=days_ahead)).isoformat()
 
-        cutoff_date = datetime.now().date() + timedelta(days=days_ahead)
+        # Note: Complex filtering (<=) needs to be done via Supabase query builder
+        # For now, fetch all date items and filter in Python
+        date_items = SupabaseQuery.select_active(
+            client=self.db,
+            table='date_items',
+            filters={'person_id': str(person_id)},
+            order_by='next_occurrence.asc'
+        )
 
-        date_items = self.db.query(DateItem).join(DateCategory).filter(
-            DateItem.person_id == person_id,
-            DateItem.deleted_at.is_(None),
-            DateItem.next_occurrence <= cutoff_date
-        ).order_by(DateItem.next_occurrence).all()
+        # Filter by cutoff date and fetch categories
+        result = []
+        for item in date_items:
+            next_occ = item.get('next_occurrence')
+            if next_occ and next_occ <= cutoff_date:
+                # Fetch category if present
+                category_name = None
+                if item.get('date_category_id'):
+                    category = SupabaseQuery.get_by_id(
+                        client=self.db,
+                        table='date_categories',
+                        id_column='date_category_id',
+                        id_value=item['date_category_id']
+                    )
+                    category_name = category.get('category_name') if category else None
 
-        return [
-            {
-                "title": item.title,
-                "date": item.next_occurrence.isoformat() if item.next_occurrence else item.date_value.isoformat(),
-                "category": item.category.category_name if item.category else None,
-                "notes": item.notes
-            }
-            for item in date_items
-        ]
+                result.append({
+                    "title": item.get('title'),
+                    "date": next_occ if next_occ else item.get('date_value'),
+                    "category": category_name,
+                    "notes": item.get('notes')
+                })
+
+        return result
 
     def _get_active_projects(self, person_id: UUID) -> list:
         """Get active projects"""
-        from app.models.projects import Project
+        # Note: Supabase .in_() filter needs to be done via query builder or fetch & filter
+        # Fetch all projects for person and filter in Python
+        projects = SupabaseQuery.select_active(
+            client=self.db,
+            table='projects',
+            filters={'person_id': str(person_id)},
+            order_by='priority.asc'
+        )
 
-        projects = self.db.query(Project).filter(
-            Project.person_id == person_id,
-            Project.status.in_(["new", "in_progress", "blocked"]),
-            Project.deleted_at.is_(None)
-        ).order_by(Project.priority, Project.created_at.desc()).all()
-
+        # Filter by status and format
+        active_statuses = ["new", "in_progress", "blocked"]
         return [
             {
-                "project_id": str(proj.project_id),
-                "title": proj.title,
-                "description": proj.description,
-                "status": proj.status,
-                "priority": proj.priority,
-                "due_date": proj.due_date.isoformat() if proj.due_date else None
+                "project_id": str(proj['project_id']),
+                "title": proj.get('title'),
+                "description": proj.get('description'),
+                "status": proj.get('status'),
+                "priority": proj.get('priority'),
+                "due_date": proj.get('due_date')
             }
             for proj in projects
+            if proj.get('status') in active_statuses
         ]
 
     def _get_preferences(self, person_id: UUID) -> dict:
         """Extract preferences from metadata and past interactions"""
-        from app.models.identity import Person
+        person = SupabaseQuery.get_by_id(
+            client=self.db,
+            table='persons',
+            id_column='person_id',
+            id_value=person_id
+        )
 
-        person = self.db.query(Person).filter(
-            Person.person_id == person_id
-        ).first()
-
-        if not person or not person.metadata_jsonb:
+        if not person or not person.get('metadata_jsonb'):
             return {}
 
         # Extract common preference categories
-        metadata = person.metadata_jsonb
+        metadata = person.get('metadata_jsonb', {})
         return {
             "dining": metadata.get("dining_preferences", {}),
             "travel": metadata.get("travel_preferences", {}),

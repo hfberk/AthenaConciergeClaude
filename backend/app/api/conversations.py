@@ -3,11 +3,11 @@
 from typing import List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from supabase import Client
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models.communication import Conversation, Message
+from app.utils.supabase_helpers import SupabaseQuery
 
 router = APIRouter()
 
@@ -48,28 +48,34 @@ async def list_conversations(
     person_id: UUID | None = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """List conversations"""
-    query = db.query(Conversation).filter(
-        Conversation.org_id == org_id,
-        Conversation.deleted_at.is_(None)
+    filters = {'org_id': org_id}
+    if person_id:
+        filters['person_id'] = person_id
+
+    conversations = SupabaseQuery.select_active(
+        client=db,
+        table='conversations',
+        filters=filters,
+        order_by='updated_at.desc',
+        limit=limit,
+        offset=skip
     )
 
-    if person_id:
-        query = query.filter(Conversation.person_id == person_id)
-
-    conversations = query.order_by(Conversation.updated_at.desc()).offset(skip).limit(limit).all()
     return conversations
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(conversation_id: UUID, db: Session = Depends(get_db)):
+async def get_conversation(conversation_id: UUID, db: Client = Depends(get_db)):
     """Get conversation by ID"""
-    conversation = db.query(Conversation).filter(
-        Conversation.conversation_id == conversation_id,
-        Conversation.deleted_at.is_(None)
-    ).first()
+    conversation = SupabaseQuery.get_by_id(
+        client=db,
+        table='conversations',
+        id_column='conversation_id',
+        id_value=conversation_id
+    )
 
     if not conversation:
         raise HTTPException(
@@ -85,12 +91,16 @@ async def list_conversation_messages(
     conversation_id: UUID,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """List messages in a conversation"""
-    messages = db.query(Message).filter(
-        Message.conversation_id == conversation_id,
-        Message.deleted_at.is_(None)
-    ).order_by(Message.created_at).offset(skip).limit(limit).all()
+    messages = SupabaseQuery.select_active(
+        client=db,
+        table='messages',
+        filters={'conversation_id': conversation_id},
+        order_by='created_at',
+        limit=limit,
+        offset=skip
+    )
 
     return messages

@@ -1,0 +1,91 @@
+-- =====================================================
+-- Migration 004: Make date_item_id Nullable in reminder_rules
+-- Date: 2025-10-24
+-- =====================================================
+--
+-- Purpose: Allow reminder_rules to exist without a date_item (generic reminders)
+--
+-- Background:
+-- - Simple reminders like "remind me in 5 minutes" don't relate to a specific date/event
+-- - Code and documentation indicate date_item_id should be optional
+-- - Current NOT NULL constraint prevents creating generic reminders
+-- - Bug: https://github.com/user/repo/issues/XXX
+--
+-- Changes:
+-- 1. Make date_item_id nullable in reminder_rules table
+--
+-- Note: RLS policy updates are handled separately in rls_policies_full.sql
+-- Apply that file if you need to update RLS policies for this change.
+--
+-- =====================================================
+
+-- Step 1: Make date_item_id nullable
+ALTER TABLE reminder_rules
+  ALTER COLUMN date_item_id DROP NOT NULL;
+
+-- Add comment to clarify usage
+COMMENT ON COLUMN reminder_rules.date_item_id IS 'Optional FK to date_items. NULL for generic scheduled reminders, populated for date-based reminders (e.g., "2 weeks before birthday")';
+
+-- =====================================================
+-- Verification Queries
+-- =====================================================
+-- Run these to verify the migration succeeded:
+--
+-- 1. Check that date_item_id is nullable:
+--
+-- SELECT
+--   table_name,
+--   column_name,
+--   data_type,
+--   is_nullable
+-- FROM information_schema.columns
+-- WHERE table_name = 'reminder_rules'
+--   AND column_name = 'date_item_id';
+--
+-- Expected result:
+-- | table_name     | column_name   | data_type | is_nullable |
+-- |----------------|---------------|-----------|-------------|
+-- | reminder_rules | date_item_id  | uuid      | YES         |
+--
+-- 2. Test creating a reminder with NULL date_item_id (using service role):
+--
+-- INSERT INTO reminder_rules (
+--   org_id,
+--   date_item_id,
+--   comm_identity_id,
+--   reminder_type,
+--   scheduled_datetime,
+--   metadata_jsonb
+-- ) VALUES (
+--   '00000000-0000-0000-0000-000000000001',
+--   NULL,  -- Generic reminder
+--   '<your-comm-identity-id>',
+--   'scheduled',
+--   NOW() + INTERVAL '5 minutes',
+--   '{"action": "Test reminder"}'::jsonb
+-- );
+--
+-- Expected: Should succeed without error
+--
+-- =====================================================
+
+-- =====================================================
+-- Usage Notes
+-- =====================================================
+--
+-- Generic Reminders (date_item_id = NULL):
+--   - Use for time-based reminders: "remind me in 30 minutes"
+--   - Use for standalone tasks: "remind me to call John tomorrow at 3pm"
+--   - No date_item needed since there's no recurring date or event
+--
+-- Date-Based Reminders (date_item_id populated):
+--   - Use for advance notice: "remind me 2 weeks before Mom's birthday"
+--   - Use for recurring events: "remind me every year on anniversary"
+--   - Requires a date_item record to reference
+--
+-- RLS Policy Updates:
+--   - The updated RLS policies are in database/rls_policies_full.sql
+--   - Apply that file separately to update access control for NULL date_item_id
+--   - See reminder_rules_select_policy for the updated policy logic
+--
+-- =====================================================

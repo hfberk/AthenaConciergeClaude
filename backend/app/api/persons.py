@@ -1,13 +1,14 @@
 """Person API endpoints"""
 
 from typing import List
-from uuid import UUID
+from uuid import UUID, uuid4
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from supabase import Client
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models.identity import Person
+from app.utils.supabase_helpers import SupabaseQuery
 
 router = APIRouter()
 
@@ -42,28 +43,33 @@ async def list_persons(
     person_type: str | None = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """List persons with optional filtering"""
-    query = db.query(Person).filter(
-        Person.org_id == org_id,
-        Person.deleted_at.is_(None)
+    filters = {'org_id': org_id}
+    if person_type:
+        filters['person_type'] = person_type
+
+    persons = SupabaseQuery.select_active(
+        client=db,
+        table='persons',
+        filters=filters,
+        limit=limit,
+        offset=skip
     )
 
-    if person_type:
-        query = query.filter(Person.person_type == person_type)
-
-    persons = query.offset(skip).limit(limit).all()
     return persons
 
 
 @router.get("/{person_id}", response_model=PersonResponse)
-async def get_person(person_id: UUID, db: Session = Depends(get_db)):
+async def get_person(person_id: UUID, db: Client = Depends(get_db)):
     """Get person by ID"""
-    person = db.query(Person).filter(
-        Person.person_id == person_id,
-        Person.deleted_at.is_(None)
-    ).first()
+    person = SupabaseQuery.get_by_id(
+        client=db,
+        table='persons',
+        id_column='person_id',
+        id_value=person_id
+    )
 
     if not person:
         raise HTTPException(
@@ -75,57 +81,71 @@ async def get_person(person_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=PersonResponse, status_code=status.HTTP_201_CREATED)
-async def create_person(person: PersonCreate, db: Session = Depends(get_db)):
+async def create_person(person: PersonCreate, db: Client = Depends(get_db)):
     """Create new person"""
-    db_person = Person(**person.model_dump())
-    db.add(db_person)
-    db.commit()
-    db.refresh(db_person)
-    return db_person
+    person_data = person.model_dump()
+    # Add required fields
+    person_data['person_id'] = uuid4()
+    person_data['created_at'] = datetime.utcnow().isoformat()
+    person_data['updated_at'] = datetime.utcnow().isoformat()
+
+    created_person = SupabaseQuery.insert(
+        client=db,
+        table='persons',
+        data=person_data
+    )
+
+    return created_person
 
 
 @router.put("/{person_id}", response_model=PersonResponse)
 async def update_person(
     person_id: UUID,
     person_update: PersonBase,
-    db: Session = Depends(get_db)
+    db: Client = Depends(get_db)
 ):
     """Update person"""
-    db_person = db.query(Person).filter(
-        Person.person_id == person_id,
-        Person.deleted_at.is_(None)
-    ).first()
+    # Check if person exists
+    existing_person = SupabaseQuery.get_by_id(
+        client=db,
+        table='persons',
+        id_column='person_id',
+        id_value=person_id
+    )
 
-    if not db_person:
+    if not existing_person:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Person not found"
         )
 
-    for key, value in person_update.model_dump(exclude_unset=True).items():
-        setattr(db_person, key, value)
+    # Update person
+    update_data = person_update.model_dump(exclude_unset=True)
+    updated_person = SupabaseQuery.update(
+        client=db,
+        table='persons',
+        id_column='person_id',
+        id_value=person_id,
+        data=update_data
+    )
 
-    db.commit()
-    db.refresh(db_person)
-    return db_person
+    return updated_person
 
 
 @router.delete("/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_person(person_id: UUID, db: Session = Depends(get_db)):
+async def delete_person(person_id: UUID, db: Client = Depends(get_db)):
     """Soft delete person"""
-    from datetime import datetime
+    deleted = SupabaseQuery.soft_delete(
+        client=db,
+        table='persons',
+        id_column='person_id',
+        id_value=person_id
+    )
 
-    db_person = db.query(Person).filter(
-        Person.person_id == person_id,
-        Person.deleted_at.is_(None)
-    ).first()
-
-    if not db_person:
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Person not found"
         )
 
-    db_person.deleted_at = datetime.utcnow()
-    db.commit()
     return None

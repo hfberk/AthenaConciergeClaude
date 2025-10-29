@@ -42,6 +42,7 @@ CREATE TABLE accounts (
 CREATE TABLE persons (
     person_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(org_id),
+    auth_user_id UUID UNIQUE REFERENCES auth.users(id), -- For client authentication (added in migration 003)
     person_type VARCHAR(50) NOT NULL CHECK (person_type IN ('client', 'staff', 'family_member')),
     full_name VARCHAR(255) NOT NULL,
     preferred_name VARCHAR(100),
@@ -55,6 +56,7 @@ CREATE TABLE persons (
 
 CREATE INDEX idx_persons_org ON persons(org_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_persons_type ON persons(person_type) WHERE deleted_at IS NULL;
+CREATE INDEX idx_persons_auth_user ON persons(auth_user_id);
 CREATE INDEX idx_persons_metadata ON persons USING gin(metadata_jsonb);
 
 -- =====================================================
@@ -234,7 +236,7 @@ CREATE INDEX idx_date_items_next_occurrence ON date_items(next_occurrence) WHERE
 CREATE TABLE reminder_rules (
     reminder_rule_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(org_id),
-    date_item_id UUID NOT NULL REFERENCES date_items(date_item_id),
+    date_item_id UUID REFERENCES date_items(date_item_id), -- Optional: NULL for generic reminders, populated for date-based reminders
     comm_identity_id UUID NOT NULL REFERENCES comm_identities(comm_identity_id),
     reminder_type VARCHAR(50) NOT NULL CHECK (reminder_type IN ('lead_time', 'scheduled')),
     lead_time_days INTEGER, -- For lead_time type: X days before

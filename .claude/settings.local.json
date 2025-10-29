@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(export DATABASE_URL=\"postgresql://postgres.gftygwnjnuldpegvyozf:WuHC60xw3YwNToW4@aws-1-us-east-2.pooler.supabase.com:6543/postgres?pgbouncer=true\":*)",
+      "Bash(pip install:*)",
+      "Read(//tmp/**)",
+      "Bash(timeout 10 python:*)",
+      "Bash(pkill:*)",
+      "Bash(timeout 30 python:*)",
+      "Bash(curl:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(echo:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

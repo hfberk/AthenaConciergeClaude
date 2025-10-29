@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_signing_secret: str = ""
+    slack_user_token: str = ""  # User token to act as Athena Concierge user
 
     # AWS SES
     aws_access_key_id: str = ""
@@ -48,6 +49,10 @@ class Settings(BaseSettings):
 
     # Vector Search
     vector_dimensions: int = 1536
+
+    # Background Workers
+    reminder_check_interval: int = 300  # 5 minutes (in seconds)
+    proactive_check_interval: int = 86400  # 24 hours (in seconds)
 
     class Config:
         env_file = ".env"

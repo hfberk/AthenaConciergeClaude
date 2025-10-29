@@ -1,5 +1,7 @@
 """FastAPI main application"""
 
+import os
+import threading
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,6 +24,34 @@ async def lifespan(app: FastAPI):
     if not health_check():
         logger.error("Database health check failed at startup!")
 
+    # Start Slack integration in background thread (user mode only)
+    if settings.slack_user_token and settings.slack_app_token and settings.slack_bot_token:
+        logger.info("Starting Slack Socket Mode integration (User mode - as Athena Concierge)")
+        from app.integrations.slack_user import start_slack_user_integration
+        slack_thread = threading.Thread(target=start_slack_user_integration, daemon=True)
+        slack_thread.start()
+        logger.info("Slack user integration started in background thread")
+    else:
+        logger.warning(
+            "Slack user mode credentials not configured (requires slack_user_token, "
+            "slack_app_token, and slack_bot_token). Slack integration disabled."
+        )
+
+    # Start background workers
+    logger.info("Starting background workers")
+
+    # Reminder worker (runs every 5 minutes)
+    from app.workers.reminder_worker import run_reminder_worker
+    reminder_thread = threading.Thread(target=run_reminder_worker, daemon=True)
+    reminder_thread.start()
+    logger.info("Reminder worker started in background thread")
+
+    # Proactive worker (runs daily)
+    from app.workers.proactive_worker import run_proactive_worker
+    proactive_thread = threading.Thread(target=run_proactive_worker, daemon=True)
+    proactive_thread.start()
+    logger.info("Proactive worker started in background thread")
+
     yield
 
     # Shutdown
@@ -37,9 +67,24 @@ app = FastAPI(
 )
 
 # CORS middleware
+replit_domain = os.getenv("REPLIT_DEV_DOMAIN", "")
+allowed_origins = [
+    settings.frontend_url,
+    "http://localhost:3000",
+    "http://localhost:5000",
+    "https://localhost:5000",
+    "http://127.0.0.1:5000",
+    "https://127.0.0.1:5000"
+]
+if replit_domain:
+    allowed_origins.extend([
+        f"https://{replit_domain}",
+        f"http://{replit_domain}"
+    ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -5,11 +5,10 @@ import structlog
 from datetime import datetime
 from app.database import get_db_context
 from app.agents.reminder import ReminderAgent
+from app.config import get_settings
 
 logger = structlog.get_logger()
-
-# Run every 5 minutes
-CHECK_INTERVAL_SECONDS = 300
+settings = get_settings()
 
 
 def run_reminder_worker():
@@ -17,7 +16,8 @@ def run_reminder_worker():
     Background worker that periodically scans for pending reminders
     and sends them via appropriate channels.
     """
-    logger.info("Reminder worker started", interval_seconds=CHECK_INTERVAL_SECONDS)
+    check_interval = settings.reminder_check_interval
+    logger.info("Reminder worker started", interval_seconds=check_interval)
 
     while True:
         try:
@@ -33,7 +33,7 @@ def run_reminder_worker():
             logger.error("Reminder worker error", error=str(e), exc_info=True)
 
         # Wait before next check
-        time.sleep(CHECK_INTERVAL_SECONDS)
+        time.sleep(check_interval)
 
 
 if __name__ == "__main__":
