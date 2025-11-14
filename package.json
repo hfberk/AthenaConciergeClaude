@@ -1,5 +1,10 @@
 {
   "devDependencies": {
+    "eslint": "^9.38.0",
+    "eslint-config-next": "^16.0.0",
     "supabase": "^2.53.6"
+  },
+  "scripts": {
+    "lint": "next lint"
   }
 }
