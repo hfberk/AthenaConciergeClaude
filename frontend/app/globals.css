@@ -1,27 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,300&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Jost:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
+  /* Sage Luxury Palette */
+  --earth-dark: #736E58;
+  --earth-black: #000000;
+  --sage-dark: #7E9D85;
+  --sage-medium: #9DBB9C;
+  --sage-light: #E4ECE6;
+  --sage-white: #F8FAF9;
+  --gold-accent: #D6A84E;
+
+  /* Background with organic feel */
+  --bg-base: var(--sage-white);
+  --bg-surface: var(--sage-light);
+  --text-primary: var(--earth-black);
+  --text-secondary: var(--sage-dark);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
+@layer base {
+  * {
+    @apply border-sage-medium;
+  }
+
+  body {
+    @apply font-body text-stem text-earth-black bg-sage-white;
+    background-image:
+      radial-gradient(circle at 20% 80%, rgba(157, 187, 156, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(214, 168, 78, 0.02) 0%, transparent 50%);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
   }
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+@layer utilities {
+  .organic-border {
+    @apply rounded-organic border-2 border-sage-medium;
+  }
+
+  .organic-card {
+    @apply bg-white rounded-organic shadow-organic border border-sage-light;
+  }
+
+  .organic-hover {
+    @apply transition-all duration-300 hover:shadow-organic-hover hover:-translate-y-0.5;
+  }
+
+  .branch-text {
+    @apply text-sage-dark font-ui;
+  }
+
+  .root-text {
+    @apply text-earth-dark font-ui text-root;
+  }
+
+  /* Respect reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-leaf-rustle,
+    .animate-branch-sway,
+    .animate-root-pulse {
+      animation: none;
+    }
+  }
 }

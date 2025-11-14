@@ -13,7 +13,9 @@
       "Bash(npm test:*)",
       "Bash(npm install:*)",
       "Bash(echo:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Skill(frontend-design)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []
